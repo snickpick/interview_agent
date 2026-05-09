@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Interview Agent</title>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
+    .container { background: white; border-radius: 16px; box-shadow: 0 2px 20px rgba(0,0,0,0.1); padding: 40px; width: 100%; max-width: 600px; margin: 20px; }
+    h1 { font-size: 24px; margin-bottom: 8px; color: #1a73e8; }
+    p { color: #666; margin-bottom: 20px; line-height: 1.5; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+    input, textarea { width: 100%; padding: 12px 16px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; transition: border-color 0.2s; }
+    input:focus, textarea:focus { outline: none; border-color: #1a73e8; }
+    textarea { min-height: 100px; resize: vertical; font-family: inherit; }
+    button { padding: 12px 24px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: transform 0.1s, opacity 0.2s; font-weight: 600; }
+    button:hover { opacity: 0.9; }
+    button:active { transform: scale(0.98); }
+    .btn-primary { background: #1a73e8; color: white; }
+    .btn-secondary { background: #e8f0fe; color: #1a73e8; }
+    .btn-success { background: #34a853; color: white; }
+    .btn-mic { background: #fbbc04; color: #333; padding: 12px 16px; }
+    .btn-mic.listening { background: #ea4335; color: white; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    .btn-group { display: flex; gap: 8px; margin-top: 16px; }
+    .btn-group button { flex: 1; }
+    .hidden { display: none; }
+    .progress { display: flex; gap: 8px; margin-bottom: 24px; align-items: center; }
+    .progress-bar { flex: 1; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #1a73e8; border-radius: 3px; transition: width 0.3s; }
+    .progress-text { font-size: 13px; color: #666; white-space: nowrap; }
+    .block-name { font-size: 13px; color: #1a73e8; font-weight: 600; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .question { font-size: 18px; font-weight: 500; line-height: 1.5; margin-bottom: 20px; }
+    .feedback { background: #f0fdf4; border-left: 4px solid #34a853; padding: 16px; border-radius: 8px; margin-bottom: 16px; font-size: 15px; line-height: 1.5; }
+    .feedback.retry { background: #fefce8; border-color: #f59e0b; }
+    .error { background: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; border-radius: 8px; color: #dc2626; margin-bottom: 16px; }
+    .done-message { text-align: center; padding: 40px 0; }
+    .done-message h2 { color: #34a853; margin-bottom: 12px; }
+    .done-message p { font-size: 16px; }
+    .status { font-size: 13px; color: #999; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="container" id="app">
+    <div id="welcome">
+        <h1>AI Interview Agent</h1>
+        <p>This is a practice interview session. You'll be asked a few questions and receive AI-powered feedback on your answers.</p>
+        <label for="name">Your Name</label>
+        <input type="text" id="name" placeholder="Enter your name" autocomplete="name">
+        <div style="margin-top:16px"><button class="btn-primary" onclick="startInterview()" id="startBtn">Start Interview</button></div>
+    </div>
+
+    <div id="interview" class="hidden">
+        <div class="progress">
+            <span class="progress-text" id="progressText">1/7</span>
+            <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:14%"></div></div>
+        </div>
+        <div class="block-name" id="blockName">Problem Solving</div>
+        <div class="question" id="question">Loading question...</div>
+        <textarea id="answer" placeholder="Type your answer here..."></textarea>
+        <div class="status" id="voiceStatus"></div>
+        <div id="feedbackArea"></div>
+        <div class="btn-group">
+            <button class="btn-mic" onclick="toggleMic()" id="micBtn">🎤 Speak</button>
+            <button class="btn-primary" onclick="submitAnswer()" id="submitBtn">Submit Answer</button>
+        </div>
+    </div>
+
+    <div id="done" class="hidden done-message">
+        <h2>✅ Interview Complete!</h2>
+        <p id="doneMessage">Thank you for your answers. Your responses have been recorded.</p>
+        <div style="margin-top:24px"><button class="btn-primary" onclick="location.reload()">Start New Interview</button></div>
+    </div>
+</div>
+
+<script>
+let state = {
+    sessionId: null,
+    blockIdx: 0,
+    questionIdx: 0,
+    totalBlocks: 3,
+    totalQuestions: 7,
+    isDone: false,
+    awaitingRepeat: false,
+};
+
+let recognition = null;
+let isListening = false;
+
+function showView(id) {
+    document.querySelectorAll('#welcome, #interview, #done').forEach(el => el.classList.add('hidden'));
+    document.getElementById(id).classList.remove('hidden');
+}
+
+function updateProgress() {
+    let idx = 0;
+    // calculate global question index
+    for (let b = 0; b < state.blockIdx; b++) {
+        if (b === 0) idx += 2; // Problem Solving: 2
+        else if (b === 1) idx += 3; // Motivation: 3
+        else if (b === 2) idx += 2; // Programming: 2
+    }
+    idx += state.questionIdx + 1;
+    const total = state.totalQuestions;
+    document.getElementById('progressText').textContent = `${idx}/${total}`;
+    document.getElementById('progressFill').style.width = `${(idx / total) * 100}%`;
+}
+
+function playTTS(text) {
+    const url = `/api/tts?text=${encodeURIComponent(text)}`;
+    const audio = new Audio(url);
+    audio.play().catch(() => {});
+}
+
+function showFeedback(text, isRetry) {
+    const area = document.getElementById('feedbackArea');
+    area.innerHTML = `<div class="feedback ${isRetry ? 'retry' : ''}">${text}</div>`;
+}
+
+function clearFeedback() {
+    document.getElementById('feedbackArea').innerHTML = '';
+}
+
+async function startInterview() {
+    const name = document.getElementById('name').value.trim();
+    if (!name) { alert('Please enter your name'); return; }
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('startBtn').textContent = 'Starting...';
+    try {
+        const res = await fetch('/api/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name}),
+        });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        state.sessionId = data.session_id;
+        state.blockIdx = data.block_idx;
+        state.questionIdx = data.question_idx;
+        showView('interview');
+        document.getElementById('blockName').textContent = data.block_name;
+        document.getElementById('question').textContent = data.question;
+        document.getElementById('answer').value = '';
+        clearFeedback();
+        updateProgress();
+    } catch (e) {
+        alert('Failed to start interview: ' + e.message);
+    }
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('startBtn').textContent = 'Start Interview';
+}
+
+async function submitAnswer() {
+    const answer = document.getElementById('answer').value.trim();
+    if (!answer) { alert('Please enter an answer'); return; }
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('submitBtn').textContent = 'Evaluating...';
+    try {
+        const res = await fetch('/api/answer', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session_id: state.sessionId, answer}),
+        });
+        const data = await res.json();
+        if (data.error) { showFeedback('Error: ' + data.error); return; }
+
+        showFeedback(data.feedback, data.repeat);
+        playTTS(data.feedback);
+
+        if (data.done) {
+            state.isDone = true;
+            setTimeout(() => {
+                showView('done');
+                document.getElementById('doneMessage').textContent = data.message || 'Interview completed!';
+            }, 2000);
+        } else if (data.repeat) {
+            state.awaitingRepeat = true;
+            document.getElementById('answer').value = '';
+            document.getElementById('submitBtn').textContent = 'Try Again';
+            document.getElementById('submitBtn').disabled = false;
+        } else {
+            state.blockIdx = data.block_idx;
+            state.questionIdx = data.question_idx;
+            document.getElementById('blockName').textContent = data.next_block_name;
+            document.getElementById('question').textContent = data.next_question;
+            document.getElementById('answer').value = '';
+            clearFeedback();
+            updateProgress();
+            document.getElementById('submitBtn').disabled = false;
+            document.getElementById('submitBtn').textContent = 'Submit Answer';
+        }
+    } catch (e) {
+        showFeedback('Error: ' + e.message);
+        document.getElementById('submitBtn').disabled = false;
+        document.getElementById('submitBtn').textContent = 'Submit Answer';
+    }
+}
+
+function toggleMic() {
+    if (isListening) {
+        stopMic();
+    } else {
+        startMic();
+    }
+}
+
+function startMic() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        document.getElementById('voiceStatus').textContent = 'Speech recognition not supported in this browser';
+        return;
+    }
+    recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = true;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+        isListening = true;
+        document.getElementById('micBtn').classList.add('listening');
+        document.getElementById('micBtn').textContent = '🔴 Stop';
+        document.getElementById('voiceStatus').textContent = 'Listening...';
+    };
+
+    recognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+        }
+        document.getElementById('answer').value = transcript;
+        document.getElementById('voiceStatus').textContent = 'Speech detected!';
+    };
+
+    recognition.onerror = (event) => {
+        document.getElementById('voiceStatus').textContent = 'Error: ' + event.error;
+        stopMic();
+    };
+
+    recognition.onend = () => {
+        if (isListening) {
+            document.getElementById('voiceStatus').textContent = 'Done listening. You can edit the text or submit.';
+        }
+        stopMic();
+    };
+
+    recognition.start();
+}
+
+function stopMic() {
+    isListening = false;
+    if (recognition) {
+        recognition.stop();
+        recognition = null;
+    }
+    document.getElementById('micBtn').classList.remove('listening');
+    document.getElementById('micBtn').textContent = '🎤 Speak';
+}
+</script>
+</body>
+</html>
