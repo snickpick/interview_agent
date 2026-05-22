@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -10,20 +11,29 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from gtts import gTTS
 from openai import OpenAI
-from pydantic import BaseModel
+
+import uvicorn
 
 from database import (
     create_session,
     get_session,
+    get_answers,
     init_db,
     save_answer,
     update_session,
 )
-from questions import INTERVIEW_BLOCKS
+from questions import generate_questions, evaluate_answer, generate_summary
 
 load_dotenv()
 
-app = FastAPI(title="Interview Agent")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Interview Bot", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,27 +48,15 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 _client = None
 
+
 def get_client():
     global _client
     if _client is None:
-        _client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        _client = OpenAI(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url="https://openrouter.ai/api/v1",
+        )
     return _client
-
-SYSTEM_PROMPT = """You are a friendly but thorough interview assistant.
-Evaluate the candidate's answer to the question. Provide brief constructive feedback.
-Then indicate whether the answer is sufficient (is_done=True) or needs more detail (is_done=False).
-Keep your feedback concise - 2-3 sentences maximum.
-Be encouraging but honest."""
-
-
-class EvalResult(BaseModel):
-    feedback: str
-    is_done: bool
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
 
 
 @app.get("/")
@@ -69,17 +67,24 @@ def index():
 @app.post("/api/start")
 def start_interview(data: dict):
     name = data.get("name", "").strip()
+    topic = data.get("topic", "").strip()
     if not name:
         return {"error": "Name is required"}
-    session_id = create_session(name)
-    block = INTERVIEW_BLOCKS[0]
+    if not topic:
+        return {"error": "Topic is required"}
+
+    client = get_client()
+    questions = generate_questions(client, topic)
+
+    session_id = create_session(name, topic, questions)
+
     return {
         "session_id": session_id,
-        "block_name": block["name"],
-        "question": block["questions"][0],
+        "name": name,
+        "topic": topic,
+        "question": questions[0],
         "question_idx": 0,
-        "block_idx": 0,
-        "total_blocks": len(INTERVIEW_BLOCKS),
+        "total_questions": len(questions),
     }
 
 
@@ -92,70 +97,68 @@ def submit_answer(data: dict):
     if not session:
         return {"error": "Invalid session"}
 
-    block = INTERVIEW_BLOCKS[session["block_idx"]]
-    question = block["questions"][session["question_idx"]]
+    q_idx = session["question_idx"]
+    question = session["questions"][q_idx]
 
-    history = session["history"]
-    history += f"\n[ANSWER] {answer}"
+    client = get_client()
+    eval_result = evaluate_answer(client, question, answer)
 
-    try:
-        parsed = get_client().beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Question: {question}\n\nAnswer: {answer}"},
-            ],
-            response_format=EvalResult,
-        )
-        result: EvalResult = parsed.choices[0].message.parsed
-    except Exception as e:
-        return {"error": f"AI evaluation failed: {str(e)}"}
+    save_answer(
+        session_id, question, answer, eval_result.score, eval_result.feedback
+    )
 
-    history += f"\n[FEEDBACK] {result.feedback}"
-    save_answer(session_id, block["name"], question, answer, result.feedback)
+    next_idx = q_idx + 1
 
-    if result.is_done:
-        next_question_idx = session["question_idx"] + 1
-        next_block_idx = session["block_idx"]
+    if next_idx >= len(session["questions"]):
+        all_answers = get_answers(session_id)
+        qa_pairs = [
+            (a["question"], a["answer"], a["score"], a["feedback"])
+            for a in all_answers
+        ]
+        summary_result = generate_summary(client, session["topic"], qa_pairs)
 
-        if next_question_idx >= len(block["questions"]):
-            next_block_idx += 1
-            next_question_idx = 0
+        total_score = sum(a["score"] for a in all_answers)
 
-        if next_block_idx >= len(INTERVIEW_BLOCKS):
-            update_session(
-                session_id,
-                completed_at=datetime.now(timezone.utc).isoformat(),
-            )
-            return {
-                "feedback": result.feedback,
-                "done": True,
-                "message": "Interview completed! Thank you for your answers.",
-            }
+        if total_score >= 90:
+            fit = "Best Fit"
+        elif total_score >= 75:
+            fit = "Fit"
         else:
-            next_block = INTERVIEW_BLOCKS[next_block_idx]
-            update_session(
-                session_id,
-                block_idx=next_block_idx,
-                question_idx=next_question_idx,
-                history="",
-            )
-            return {
-                "feedback": result.feedback,
-                "done": False,
-                "next_question": next_block["questions"][next_question_idx],
-                "next_block_name": next_block["name"],
-                "block_idx": next_block_idx,
-                "question_idx": next_question_idx,
-            }
-    else:
-        update_session(session_id, history=history)
+            fit = "Not Fit"
+
+        update_session(
+            session_id,
+            question_idx=next_idx,
+            total_score=total_score,
+            summary=summary_result.summary,
+            strengths=summary_result.strengths,
+            weaknesses=summary_result.weaknesses,
+            fit_result=fit,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+
         return {
-            "feedback": result.feedback,
-            "done": False,
-            "repeat": True,
-            "question": question,
+            "feedback": eval_result.feedback,
+            "score": eval_result.score,
+            "done": True,
+            "total_score": total_score,
+            "total_questions": len(session["questions"]),
+            "fit": fit,
+            "strengths": summary_result.strengths,
+            "weaknesses": summary_result.weaknesses,
+            "summary": summary_result.summary,
         }
+
+    update_session(session_id, question_idx=next_idx)
+
+    return {
+        "feedback": eval_result.feedback,
+        "score": eval_result.score,
+        "done": False,
+        "next_question": session["questions"][next_idx],
+        "question_idx": next_idx,
+        "total_questions": len(session["questions"]),
+    }
 
 
 @app.get("/api/tts")
@@ -165,3 +168,7 @@ def text_to_speech(text: str):
     tts.write_to_fp(buf)
     buf.seek(0)
     return Response(content=buf.read(), media_type="audio/mpeg")
+
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
