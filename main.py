@@ -14,15 +14,18 @@ from openai import OpenAI
 
 import uvicorn
 
+from agent import InterviewAgent
 from database import (
     create_session,
-    get_session,
     get_answers,
+    get_memory_state,
+    get_session,
     init_db,
     save_answer,
+    save_memory_state,
     update_session,
 )
-from questions import generate_questions, evaluate_answer, generate_summary
+from memory import InterviewMemory
 
 load_dotenv()
 
@@ -59,6 +62,18 @@ def get_client():
     return _client
 
 
+def load_agent(session_id):
+    client = get_client()
+    state = get_memory_state(session_id)
+    if state:
+        return InterviewAgent.from_dict(client, state)
+    return InterviewAgent(client=client)
+
+
+def save_agent(session_id, agent):
+    save_memory_state(session_id, agent.to_dict())
+
+
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -68,15 +83,23 @@ def index():
 def start_interview(data: dict):
     name = data.get("name", "").strip()
     topic = data.get("topic", "").strip()
+    num_questions = data.get("num_questions", 10)
+
     if not name:
         return {"error": "Name is required"}
     if not topic:
         return {"error": "Topic is required"}
+    if not isinstance(num_questions, int) or num_questions < 1:
+        return {"error": "num_questions must be a positive integer"}
 
     client = get_client()
-    questions = generate_questions(client, topic)
-
-    session_id = create_session(name, topic, questions)
+    agent = InterviewAgent(
+        client=client,
+        memory=InterviewMemory(total_questions=num_questions),
+    )
+    questions = agent.generate_questions(topic)
+    session_id = create_session(name, topic, questions, num_questions=num_questions)
+    save_agent(session_id, agent)
 
     return {
         "session_id": session_id,
@@ -100,8 +123,8 @@ def submit_answer(data: dict):
     q_idx = session["question_idx"]
     question = session["questions"][q_idx]
 
-    client = get_client()
-    eval_result = evaluate_answer(client, question, answer)
+    agent = load_agent(session_id)
+    eval_result = agent.evaluate_answer(question, answer, q_idx)
 
     save_answer(
         session_id, question, answer, eval_result.score, eval_result.feedback
@@ -110,13 +133,9 @@ def submit_answer(data: dict):
     next_idx = q_idx + 1
 
     if next_idx >= len(session["questions"]):
-        all_answers = get_answers(session_id)
-        qa_pairs = [
-            (a["question"], a["answer"], a["score"], a["feedback"])
-            for a in all_answers
-        ]
-        summary_result = generate_summary(client, session["topic"], qa_pairs)
+        summary_result = agent.generate_summary(session["topic"])
 
+        all_answers = get_answers(session_id)
         total_score = sum(a["score"] for a in all_answers)
 
         if total_score >= 90:
@@ -136,6 +155,7 @@ def submit_answer(data: dict):
             fit_result=fit,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
+        save_agent(session_id, agent)
 
         return {
             "feedback": eval_result.feedback,
@@ -150,6 +170,7 @@ def submit_answer(data: dict):
         }
 
     update_session(session_id, question_idx=next_idx)
+    save_agent(session_id, agent)
 
     return {
         "feedback": eval_result.feedback,
