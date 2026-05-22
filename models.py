@@ -8,6 +8,7 @@ class QuestionList(BaseModel):
 class AnswerEval(BaseModel):
     score: int
     feedback: str
+    acknowledgment: str | None = None
 
 
 class FinalEval(BaseModel):
