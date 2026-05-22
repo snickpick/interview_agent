@@ -122,9 +122,10 @@ def submit_answer(data: dict):
 
     q_idx = session["question_idx"]
     question = session["questions"][q_idx]
+    is_last = q_idx >= len(session["questions"]) - 1
 
     agent = load_agent(session_id)
-    eval_result = agent.evaluate_answer(question, answer, q_idx)
+    eval_result = agent.evaluate_answer(question, answer, q_idx, is_last=is_last)
 
     save_answer(
         session_id, question, answer, eval_result.score, eval_result.feedback
