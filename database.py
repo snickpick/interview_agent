@@ -26,6 +26,8 @@ def init_db():
             strengths TEXT,
             weaknesses TEXT,
             fit_result TEXT,
+            memory_state TEXT,
+            num_questions INTEGER DEFAULT 10,
             created_at TEXT NOT NULL,
             completed_at TEXT
         );
@@ -40,17 +42,22 @@ def init_db():
             FOREIGN KEY (session_id) REFERENCES sessions(id)
         );
     """)
+    for col, col_type in [("memory_state", "TEXT"), ("num_questions", "INTEGER DEFAULT 10")]:
+        try:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     conn.close()
 
 
-def create_session(name, topic, questions):
+def create_session(name, topic, questions, num_questions=None):
     session_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
     conn.execute(
-        "INSERT INTO sessions (id, name, topic, questions, question_idx, total_score, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)",
-        (session_id, name, topic, json.dumps(questions), now),
+        "INSERT INTO sessions (id, name, topic, questions, question_idx, total_score, num_questions, created_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?)",
+        (session_id, name, topic, json.dumps(questions), num_questions or len(questions), now),
     )
     conn.commit()
     conn.close()
@@ -109,3 +116,24 @@ def get_answers(session_id):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def save_memory_state(session_id, memory_dict):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE sessions SET memory_state = ? WHERE id = ?",
+        (json.dumps(memory_dict), session_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_memory_state(session_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT memory_state FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    conn.close()
+    if not row or not row["memory_state"]:
+        return None
+    return json.loads(row["memory_state"])
