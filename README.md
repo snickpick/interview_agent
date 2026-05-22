@@ -14,7 +14,7 @@ pip install -r requirements.txt
 uvicorn main:app
 ```
 
-## TODO
+## Todo
 
 - [x] Web Speech API integration (STT/TTS)
 - [x] LLM question generation with structured output
