@@ -48,7 +48,7 @@ class InterviewAgent:
         return questions
 
     def evaluate_answer(
-        self, question: str, answer: str, question_idx: int
+        self, question: str, answer: str, question_idx: int, is_last: bool = False
     ) -> AnswerEval:
         context = self.memory.get_context()
 
@@ -56,14 +56,42 @@ class InterviewAgent:
             "You are an expert interviewer evaluating a candidate's answer. "
             "Score from 0-10 based on accuracy, completeness, clarity, and depth. "
             "Be strict - a perfect score of 10 means the answer is comprehensive and flawless. "
-            "Provide brief constructive feedback (1-2 sentences). "
-            "If the candidate indicates no knowledge or very little knowledge "
-            "about the topic (e.g. says 'I don't know', 'I'm not familiar', "
-            "'I have no idea', 'I haven't learned that'), set the 'acknowledgment' "
-            "field to a supportive message like 'That's okay, let's move on to "
-            "a different topic.' and score accordingly (0-3). "
-            "The acknowledgment should be encouraging, not condescending."
+            "Provide specific feedback (1-2 sentences) that quotes or references "
+            "particular words the candidate used. "
+            "CRITICAL: Vary your feedback structure and tone across answers. "
+            "Do NOT start feedback the same way twice. "
+            "Never repeat the same phrases between answers. "
+            "Focus on what was specifically said rather than generic critiques."
         )
+
+        if self.memory.tier >= 2 or len(self.memory.turns) > 6:
+            system_content += (
+                " Do NOT give generic feedback. Each answer is different so "
+                "your response should be too."
+            )
+
+        low_knowledge_instruction = (
+            " ONLY set the 'acknowledgment' field if the candidate explicitly "
+            "states they do not know (e.g. says 'I don't know', 'I'm not familiar', "
+            "'I have no idea', 'I haven't learned that'). "
+            "A wrong or incomplete answer alone does NOT trigger an acknowledgment. "
+            "When set, the acknowledgment must be a brief supportive message. "
+            "Vary the acknowledgment phrasing — don't always say 'let's move on'. "
+        )
+
+        if is_last:
+            low_knowledge_instruction += (
+                "IMPORTANT: This is the LAST question of the interview. "
+                "Do NOT suggest moving to another topic or question "
+                "in the acknowledgment."
+            )
+        else:
+            low_knowledge_instruction += (
+                "If appropriate, gently suggest moving to the next area."
+            )
+
+        system_content += low_knowledge_instruction
+
         if context:
             system_content += (
                 "\n\nConsider the candidate's performance trajectory from the "
