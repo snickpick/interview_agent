@@ -159,6 +159,7 @@ def submit_answer(data: dict):
 
         return {
             "feedback": eval_result.feedback,
+            "acknowledgment": eval_result.acknowledgment,
             "score": eval_result.score,
             "done": True,
             "total_score": total_score,
@@ -174,6 +175,7 @@ def submit_answer(data: dict):
 
     return {
         "feedback": eval_result.feedback,
+        "acknowledgment": eval_result.acknowledgment,
         "score": eval_result.score,
         "done": False,
         "next_question": session["questions"][next_idx],
