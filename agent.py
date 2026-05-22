@@ -57,6 +57,12 @@ class InterviewAgent:
             "Score from 0-10 based on accuracy, completeness, clarity, and depth. "
             "Be strict - a perfect score of 10 means the answer is comprehensive and flawless. "
             "Provide brief constructive feedback (1-2 sentences). "
+            "If the candidate indicates no knowledge or very little knowledge "
+            "about the topic (e.g. says 'I don't know', 'I'm not familiar', "
+            "'I have no idea', 'I haven't learned that'), set the 'acknowledgment' "
+            "field to a supportive message like 'That's okay, let's move on to "
+            "a different topic.' and score accordingly (0-3). "
+            "The acknowledgment should be encouraging, not condescending."
         )
         if context:
             system_content += (
@@ -84,9 +90,12 @@ class InterviewAgent:
         self.memory.add_turn(
             "answer", answer, {"question_idx": question_idx}
         )
+        eval_text = f"Score: {eval_result.score}/10. Feedback: {eval_result.feedback}"
+        if eval_result.acknowledgment:
+            eval_text += f" Acknowledgment: {eval_result.acknowledgment}"
         self.memory.add_turn(
             "evaluation",
-            f"Score: {eval_result.score}/10. Feedback: {eval_result.feedback}",
+            eval_text,
             {"question_idx": question_idx, "score": eval_result.score},
         )
 
