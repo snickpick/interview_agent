@@ -621,6 +621,10 @@
     <div class="input-group">
       <input id="nameInput" type="text" placeholder="Your name" autocomplete="name">
       <input id="topicInput" type="text" placeholder="Interview topic (e.g., Python, Machine Learning, DevOps)" autocomplete="off">
+      <div style="position:relative; width:100%;">
+        <input id="numQuestionsInput" type="number" min="1" max="500" value="10" placeholder="Number of questions">
+        <span style="position:absolute; right:14px; top:50%; transform:translateY(-50%); font-size:0.75rem; color:var(--text-dim); pointer-events:none;" id="qCountHint">10</span>
+      </div>
     </div>
     <button class="btn btn-primary" id="startBtn" onclick="startInterview()">Start Interview</button>
   </div>
@@ -723,6 +727,11 @@
 
   const $ = id => document.getElementById(id);
   const chatArea = $('chatArea');
+
+  $('numQuestionsInput').addEventListener('input', function () {
+    const val = parseInt(this.value) || 10;
+    $('qCountHint').textContent = Math.max(1, Math.min(500, val));
+  });
 
   // ─── TTS ───
   let ttsVoices = [];
@@ -846,10 +855,11 @@
     $('startBtn').textContent = 'Starting...';
 
     try {
+      const numQuestions = parseInt($('numQuestionsInput').value) || 10;
       const res = await fetch('/api/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, topic }),
+        body: JSON.stringify({ name, topic, num_questions: numQuestions }),
       });
       const data = await res.json();
       if (data.error) { alert(data.error); $('startBtn').disabled = false; $('startBtn').textContent = 'Start Interview'; return; }
