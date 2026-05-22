@@ -1245,27 +1245,41 @@
           else if (score < 8) badgeClass = "med";
           const feedbackHtml = `${data.feedback} <span class="score-badge ${badgeClass}">Score: ${score}/10</span>`;
           addMessage("bot", feedbackHtml);
-          botMouthSpeak(true);
-          speakText(data.feedback, () => {
-            botMouthSpeak(false);
-          });
 
-          if (data.done) {
-            S.isComplete = true;
-            S.questionIdx = data.total_questions;
-            setProgress();
-            setTimeout(() => showResults(data), 1200);
-          } else {
-            S.questionIdx = data.question_idx;
-            setProgress();
-            // Next question after delay
-            setTimeout(() => {
-              askQuestion(data.next_question);
-              S.isProcessing = false;
-              $("answerInput").disabled = false;
-              $("answerInput").focus();
-            }, 1800);
+          function proceedToNext() {
+            if (data.done) {
+              S.isComplete = true;
+              S.questionIdx = data.total_questions;
+              setProgress();
+              setTimeout(() => showResults(data), 1200);
+            } else {
+              S.questionIdx = data.question_idx;
+              setProgress();
+              setTimeout(() => {
+                askQuestion(data.next_question);
+                S.isProcessing = false;
+                $("answerInput").disabled = false;
+                $("answerInput").focus();
+              }, 600);
+            }
           }
+
+          function onFeedbackDone() {
+            botMouthSpeak(false);
+            if (data.acknowledgment) {
+              addMessage("bot", data.acknowledgment);
+              botMouthSpeak(true);
+              speakText(data.acknowledgment, () => {
+                botMouthSpeak(false);
+                proceedToNext();
+              });
+            } else {
+              proceedToNext();
+            }
+          }
+
+          botMouthSpeak(true);
+          speakText(data.feedback, onFeedbackDone);
         } catch (e) {
           removeTyping();
           addMessage("bot", "Network error. Please try again.");
